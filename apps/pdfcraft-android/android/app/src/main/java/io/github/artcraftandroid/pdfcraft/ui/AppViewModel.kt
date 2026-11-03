@@ -120,11 +120,30 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     }
 
     fun refreshRecents() {
-        viewModelScope.launch { recentList = withContext(Dispatchers.IO) { recents.list() } }
+        viewModelScope.launch {
+            val open = document?.source?.toString()
+            recentList = withContext(Dispatchers.IO) {
+                recents.list().also { list ->
+                    // copies of documents that left Recent go too (#42)
+                    runCatching { files.pruneCopies(list.map { it.uri }, open) }
+                }
+            }
+        }
     }
 
-    /** Open the PDF at [uri] (picked, shared, or from Recent), asking for its password if it has one. */
-    fun open(uri: Uri, password: String? = null) {
+    /** The document another app is opening in PdfCraft, until it opens. */
+    private var otherAppUri: Uri? = null
+
+    /** Fires when a document another app opened is closed: the activity finishes, back to that app. */
+    val leave = Channel<Unit>(Channel.CONFLATED)
+
+    /**
+     * Open the PDF at [uri] (picked, shared, or from Recent), asking for its password if it has one.
+     * [fromOtherApp]: another app opened it, so closing it goes back to that app rather than Home,
+     * as the reference does (#47).
+     */
+    fun open(uri: Uri, password: String? = null, fromOtherApp: Boolean = false) {
+        otherAppUri = uri.takeIf { fromOtherApp }
         // a file opened from another app comes to the front, not under Settings
         settingsOpen = false
         showLicences = false
@@ -138,10 +157,18 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 }
                 openFile(eng, uri, file, password)
             } catch (e: java.io.FileNotFoundException) {
-                // moved or deleted since it was opened: it leaves Recent
-                withContext(Dispatchers.IO) { recents.remove(setOf(uri.toString())) }
-                refreshRecents()
-                tell(text(R.string.msg_file_moved))
+                // Moved or deleted since it was opened, or a link a file manager lent that a
+                // restart ended (#50; its provider no longer finds it): PdfCraft's own copy opens
+                // if it kept one, as below; otherwise it leaves Recent.
+                val copy = withContext(Dispatchers.IO) { files.existingCopy(uri) }
+                if (copy != null) {
+                    openFile(eng, uri, copy, password)
+                    tell(text(R.string.msg_opened_own_copy))
+                } else {
+                    withContext(Dispatchers.IO) { recents.remove(setOf(uri.toString())) }
+                    refreshRecents()
+                    tell(text(R.string.msg_file_moved))
+                }
             } catch (e: SecurityException) {
                 // A file another app lent for one visit (Files, Downloads: "Open with"): Android
                 // takes that access back later, so Recent can't read it again. PdfCraft's own copy
@@ -190,6 +217,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             val images = PageImages(eng, info.id, viewModelScope, imageBudget)
             val source = uri.takeIf { it.scheme == "content" || it.scheme == "file" }
             val doc = OpenDocument(info.id, info, source, file, images, password, eng, viewModelScope)
+            doc.fromOtherApp = otherAppUri == uri
             val (recent, writable) = withContext(Dispatchers.IO) {
                 recents.list().firstOrNull { it.uri == uri.toString() } to (source == null || files.canWrite(source))
             }
@@ -248,6 +276,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             saveAndClose(eng, doc)
             readingMode = false
             refreshRecents()
+            if (doc.fromOtherApp) leave.trySend(Unit)
         }
     }
 
@@ -263,6 +292,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 viewModelScope.launch {
                     closeQuietly(eng, doc)
                     refreshRecents()
+                    if (doc.fromOtherApp) leave.trySend(Unit)
                 }
             })
             false -> {
@@ -270,6 +300,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 viewModelScope.launch {
                     closeQuietly(eng, doc)
                     refreshRecents()
+                    if (doc.fromOtherApp) leave.trySend(Unit)
                 }
             }
         }
@@ -303,6 +334,8 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         runCatching { eng.command { close(doc.id, true) } }
         doc.images.close()
         doc.search.clear()
+        // the working copy isn't kept when the original can be read again (#42)
+        doc.source?.let { src -> withContext(Dispatchers.IO) { runCatching { files.dropCopyIfReachable(src) } } }
     }
 
     /** The app went to the background: save the open document, as the reference does. */
