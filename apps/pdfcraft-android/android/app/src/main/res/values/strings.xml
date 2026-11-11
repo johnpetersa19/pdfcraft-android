@@ -222,6 +222,8 @@
     <string name="home_section_screen">Screen setting</string>
     <string name="home_keep_screen_on">Keep the screen on</string>
     <string name="home_keep_screen_on_body">Keeps the screen on while you read, for up to 30 minutes without a touch.</string>
+    <string name="home_eink_mode">E-ink mode</string>
+    <string name="home_eink_mode_body">For e-paper screens: black and white with no grey backgrounds, no animations, and pages that stop where your finger lifts. Android\'s Remove animations setting also turns the animations off.</string>
     <string name="home_section_keyboard">Keyboard</string>
     <string name="home_keyboard_shortcuts">Keyboard shortcuts</string>
     <!-- N, P, Page Down, Page Up, Ctrl+P, Ctrl, + and − are keys on the keyboard -->
@@ -232,6 +234,15 @@
     <string name="home_status_bar_in_documents_body">The status bar shows with the toolbars. When you tap to hide them, the page uses the whole screen, around the camera too.</string>
     <string name="home_search_count">Show the number of search results</string>
     <string name="home_search_count_body">Find in a document shows which result you\'re on and how many there are, such as 3 of 12.</string>
+    <string name="home_two_pages_on_phones">Two-page views on phones</string>
+    <string name="home_two_pages_on_phones_body">View settings also offers Two pages and Two pages with cover page on a phone, handy in landscape. Tablets always have them.</string>
+    <string name="home_properties_in_menu">Document properties in the menu</string>
+    <string name="home_properties_in_menu_body">The ⋮ menu in a document gets Document properties: the file\'s name, size and place, its title, author and other details, the PDF version, page size and security.</string>
+    <string name="home_scan_folder">Folder for scans</string>
+    <!-- %1$s: a folder's name, or home_scan_folder_downloads -->
+    <string name="home_scan_folder_body">New scans are saved in %1$s.</string>
+    <string name="home_scan_folder_downloads">Downloads</string>
+    <string name="home_scan_folder_reset">Save scans in Downloads</string>
 
     <!-- Settings: About PdfCraft -->
     <string name="home_section_about">About</string>
@@ -437,6 +448,8 @@
     <!-- Viewer: the scrubber and Go to page -->
     <!-- Translator note: %1$d is the current page number, %2$d the number of pages. -->
     <string name="viewer_page_of">Page %1$d of %2$d</string>
+    <!-- Under the page number in the box shown while the scrubber is dragged: "of 42" -->
+    <string name="viewer_scrub_of">of %1$d</string>
     <string name="viewer_go_to_page">Go to page</string>
     <!-- Translator note: the range of page numbers that can be entered; %1$d is the last page. -->
     <string name="viewer_go_to_page_range">1 - %1$d</string>
@@ -669,6 +682,42 @@
     <!-- Viewer sheets: View settings -->
     <string name="sheet_continuous">Continuous</string>
     <string name="sheet_single_page">Single page</string>
+    <string name="sheet_two_pages">Two pages</string>
+    <string name="sheet_two_pages_cover">Two pages with cover page</string>
+    <string name="sheet_properties">Document properties</string>
+    <string name="props_section_file">File</string>
+    <string name="props_section_description">Description</string>
+    <string name="props_section_advanced">Advanced</string>
+    <string name="props_section_security">Security</string>
+    <string name="props_section_custom">Custom</string>
+    <string name="props_name">Name</string>
+    <string name="props_size">Size</string>
+    <string name="props_location">Location</string>
+    <string name="props_modified">Modified</string>
+    <string name="props_title">Title</string>
+    <string name="props_author">Author</string>
+    <string name="props_subject">Subject</string>
+    <string name="props_keywords">Keywords</string>
+    <string name="props_creator">Application</string>
+    <string name="props_producer">PDF producer</string>
+    <string name="props_pdf_created">PDF created</string>
+    <string name="props_pdf_modified">PDF modified</string>
+    <string name="props_version">PDF version</string>
+    <string name="props_pages">Pages</string>
+    <string name="props_page_size">Page size</string>
+    <!-- %1$s: a page size, such as 210 × 297 mm -->
+    <string name="props_page_size_mixed">%1$s (pages differ in size)</string>
+    <string name="props_tagged">Tagged PDF</string>
+    <string name="props_password">Password protected</string>
+    <string name="props_printing">Printing</string>
+    <string name="props_copying">Copying text and images</string>
+    <string name="props_commenting">Commenting</string>
+    <string name="props_form_filling">Filling in forms</string>
+    <string name="props_assembly">Organizing pages</string>
+    <string name="props_yes">Yes</string>
+    <string name="props_no">No</string>
+    <string name="props_allowed">Allowed</string>
+    <string name="props_not_allowed">Not allowed</string>
     <string name="sheet_reading_mode">Reading Mode</string>
     <string name="sheet_night_mode">Night Mode</string>
 
@@ -811,6 +860,7 @@
 
     <!-- Draw tool -->
     <string name="toolbar_draw_freeform">Draw freeform</string>
+    <string name="toolbar_eraser">Eraser</string>
     <string name="toolbar_line_thickness">Line thickness</string>
     <!-- Note: a setting that turns hand-drawn strokes into clean lines, boxes, ovals and polygons -->
     <string name="toolbar_snap_to_shape">Snap to shape</string>
@@ -1002,6 +1052,9 @@
     <!-- Messages: saving. %1$s is a file name; %2$s is its size (for example "1.2 MB"). -->
     <string name="msg_saved_copy">Saved a copy</string>
     <string name="msg_saved_downloads">Saved as %1$s in Downloads</string>
+    <!-- %1$s: the file's name; %2$s: the folder's -->
+    <string name="msg_saved_in_folder">Saved as %1$s in %2$s</string>
+    <string name="msg_scan_folder_lost">The folder for scans can\'t be reached any more, so %1$s was saved in Downloads.</string>
     <string name="msg_saved_downloads_size">Saved as %1$s in Downloads (%2$s)</string>
 
     <!-- Messages: Read aloud -->
@@ -1122,6 +1175,7 @@
     <string name="msg_rename_not_here">This file can\'t be renamed here.</string>
     <string name="msg_duplicated">Duplicated as %1$s in Downloads</string>
     <string name="msg_delete_failed">The file couldn\'t be deleted.</string>
+    <string name="msg_delete_not_allowed">%1$s can\'t be deleted from PdfCraft: the app you opened it from doesn\'t allow it. Delete it there, or remove it from Recent.</string>
     <string name="msg_file_deleted">%1$s deleted</string>
 
     <!-- ================================================================== -->

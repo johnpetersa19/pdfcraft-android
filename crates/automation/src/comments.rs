@@ -70,6 +70,9 @@ fn hex(c: [f32; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", b(c[0]), b(c[1]), b(c[2]))
 }
 
+/// The most points an eraser path may have (a long drag is a few hundred).
+const MAX_ERASER_POINTS: usize = 20_000;
+
 fn to_user(p: &PageInfo, x: f64, y: f64) -> [f64; 2] {
     let [ux, uy] = p.view_to_user(x as f32, y as f32);
     [ux as f64, uy as f64]
@@ -183,6 +186,7 @@ impl Automation {
                 "page": c.page + 1,
                 "index": c.index + 1,
                 "type": c.subtype,
+                "intent": c.intent,
                 "author": c.author,
                 "contents": c.contents,
                 "modified": c.modified,
@@ -328,7 +332,7 @@ impl Automation {
                     let [start, end] = ending_pair(kind, endings.as_deref())?;
                     Shape::Line { from: to_user(&info, f[0], f[1]), to: to_user(&info, t[0], t[1]), start, end }
                 }
-                "ink" => {
+                "ink" | "freehand_highlight" => {
                     let wrong = || ToolError::InvalidArgs("strokes must be an array of arrays of [x, y] points".into());
                     let strokes = a.get("strokes").ok_or_else(|| ToolError::InvalidArgs("ink needs `strokes`".into()))?;
                     let strokes = strokes
@@ -346,7 +350,7 @@ impl Automation {
                                 .collect::<Result<Vec<_>>>()
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Shape::Ink { strokes }
+                    if kind == "freehand_highlight" { Shape::FreehandHighlight { strokes } } else { Shape::Ink { strokes } }
                 }
                 "polygon" | "cloud" | "polyline" => {
                     let wrong = || ToolError::InvalidArgs(format!("{kind} needs `points`: an array of [x, y] points"));
@@ -509,6 +513,10 @@ impl Automation {
         if sensitivity.is_some() && !scan {
             return Err(ToolError::InvalidArgs("sensitivity is only for scan: true".into()));
         }
+        let requested_color = a.color("color")?;
+        if requested_color.is_some() && !matches!(kind, "text" | "date") {
+            return Err(ToolError::InvalidArgs("color is only for type text or date".into()));
+        }
         let requested_size = a.opt_num("font_size")?;
         if requested_size.is_some() && !matches!(kind, "text" | "date") {
             return Err(ToolError::InvalidArgs("font_size is only for type text or date".into()));
@@ -542,8 +550,11 @@ impl Automation {
         }
         let text_at = |t: &str| {
             // Measured as the appearance draws it (in Inter when the standard fonts can't hold it).
-            let w = (pdfcraft_engine::annot_text::text_measure(t)(t, size) + 8.0).clamp(20.0, 600.0);
-            let h = size * 1.2 + 6.0;
+            let measure = pdfcraft_engine::annot_text::text_measure(t);
+            let longest = t.lines().map(|line| measure(line, size)).fold(0.0, f64::max);
+            let w = (longest + 8.0).clamp(20.0, 600.0);
+            let rows = pdfcraft_engine::annot_text::wrap_with(t, size, w - 4.0, measure).len().max(1);
+            let h = rows as f64 * size * 1.2 + 6.0;
             let rect = pdfcraft_engine::text_box_at(i64::from(info.rotation), at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]]);
             Shape::Typewriter { rect, font_size: size }
         };
@@ -587,7 +598,10 @@ impl Automation {
                 (Shape::Mark { rect: mark.rect_at(at, i64::from(info.rotation)), mark }, String::new())
             }
         };
-        let style = Style::default_for(&shape);
+        let mut style = Style::default_for(&shape);
+        if let Some(color) = requested_color {
+            style.color = color;
+        }
         self.apply(a, Edit::AddAnnotation(NewAnnotation { page, shape, style, contents, author }))
     }
 
@@ -697,6 +711,57 @@ impl Automation {
     pub(crate) fn comment_delete(&mut self, a: &Args) -> Result<Value> {
         let (page, index) = self.comment_target(a)?;
         self.apply(a, Edit::DeleteAnnotation { page, index })
+    }
+
+    /// The Eraser on page `page`: `path` is in page points from the top-left. The drawings whose
+    /// box comes within `radius` of it are erased together, one undo step, later ones first (an
+    /// emptied drawing is deleted, which moves the ones after it), as the desktop's eraser does.
+    pub(crate) fn comment_erase(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let info = self.doc(a)?.info.pages.get(page).cloned().ok_or_else(|| failed(format!("no page {}", page.saturating_add(1))))?;
+        let wrong = || ToolError::InvalidArgs("path must be an array of [x, y] points".into());
+        let path = a
+            .get("path")
+            .and_then(Value::as_array)
+            .ok_or_else(wrong)?
+            .iter()
+            .map(|p| match p.as_array().map(|p| p.iter().map(Value::as_f64).collect::<Vec<_>>()).as_deref() {
+                Some([Some(x), Some(y)]) if x.is_finite() && y.is_finite() => Ok(to_user(&info, *x, *y)),
+                _ => Err(wrong()),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if path.is_empty() || path.len() > MAX_ERASER_POINTS {
+            return Err(ToolError::InvalidArgs(format!("path needs 1 to {MAX_ERASER_POINTS} points")));
+        }
+        let radius = match a.get("radius") {
+            None | Some(Value::Null) => 6.0,
+            Some(v) => v
+                .as_f64()
+                .filter(|r| r.is_finite() && *r > 0.0 && *r <= 200.0)
+                .ok_or_else(|| ToolError::InvalidArgs("radius must be a number above 0, at most 200".into()))?,
+        };
+        let b = path.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]);
+        let mut hits: Vec<usize> = self
+            .comments(a)?
+            .iter()
+            .filter(|c| c.page == page && c.subtype == "Ink" && !c.locked)
+            .filter(|c| {
+                let r = c.rect.map(f64::from);
+                r[0] <= b[2] + radius && r[2] >= b[0] - radius && r[1] <= b[3] + radius && r[3] >= b[1] - radius
+            })
+            .map(|c| c.index)
+            .collect();
+        if hits.is_empty() {
+            return Ok(json!({ "drawings": 0 }));
+        }
+        hits.sort_unstable_by(|x, y| y.cmp(x));
+        let n = hits.len();
+        let edits = hits.into_iter().map(|index| Edit::EraseInk { page, index, path: path.clone(), radius }).collect();
+        let mut out = self.apply(a, Edit::Batch { label: "Erase".into(), edits })?;
+        if let Some(o) = out.as_object_mut() {
+            o.insert("drawings".into(), json!(n));
+        }
+        Ok(out)
     }
 }
 

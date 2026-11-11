@@ -69,9 +69,22 @@ class DocumentFiles(private val context: Context) {
      * keeps its copy, which is what Recent opens once Android takes that access back.
      */
     fun dropCopyIfReachable(uri: Uri) {
-        if (uri.scheme != ContentResolver.SCHEME_CONTENT) return
-        if (resolver.persistedUriPermissions.none { it.uri == uri && it.isReadPermission }) return
+        if (!readableAgain(uri.toString(), readGrants())) return
         File(workDir, sha(uri.toString())).deleteRecursively()
+    }
+
+    /** The places the app was given lasting read access to: documents, and folders (On device). */
+    private fun readGrants(): List<String> = resolver.persistedUriPermissions.filter { it.isReadPermission }.map { it.uri.toString() }
+
+    /**
+     * Whether the app can open [uri] again later: a file it can read, a document it was given
+     * lasting access to, or one inside a folder it was given (a document link built on that
+     * folder's: `…/tree/<folder>/document/<file>`).
+     */
+    private fun readableAgain(uri: String, grants: List<String>): Boolean = when {
+        uri.startsWith("file:") -> Uri.parse(uri).path?.let { File(it).canRead() } == true
+        uri.startsWith("content:") -> grants.any { g -> uri == g || uri.startsWith("$g/document/") }
+        else -> false
     }
 
     /**
@@ -80,8 +93,8 @@ class DocumentFiles(private val context: Context) {
      * does one written in the last few minutes (a document being opened right now).
      */
     fun pruneCopies(recent: Collection<String>, open: String?) {
-        val readable = resolver.persistedUriPermissions.filter { it.isReadPermission }.mapTo(HashSet()) { it.uri.toString() }
-        val wanted = recent.filter { it !in readable }.mapTo(HashSet()) { sha(it) }
+        val grants = readGrants()
+        val wanted = recent.filter { !readableAgain(it, grants) }.mapTo(HashSet()) { sha(it) }
         open?.let { wanted += sha(it) }
         val settled = System.currentTimeMillis() - 10 * 60 * 1000L
         workDir.listFiles()?.forEach { dir ->
@@ -202,6 +215,25 @@ class DocumentFiles(private val context: Context) {
             resolver.update(uri, android.content.ContentValues().apply { put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
         } catch (e: Exception) {
             resolver.delete(uri, null, null)
+            throw e
+        }
+        return uri
+    }
+
+    /**
+     * Save [file] as [name] in folder [tree], one the app has lasting access to (the folder for
+     * scans, #60); its link. The folder's provider may change the name if it's taken.
+     */
+    fun saveToFolder(tree: Uri, file: File, name: String, mime: String = "application/pdf"): Uri {
+        val parent = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, android.provider.DocumentsContract.getTreeDocumentId(tree))
+        val uri = requireNotNull(android.provider.DocumentsContract.createDocument(resolver, parent, mime, name)) { "no document was made in $tree" }
+        try {
+            resolver.openOutputStream(uri, "w").use { out ->
+                requireNotNull(out) { "$uri can't be written" }
+                file.inputStream().use { it.copyTo(out) }
+            }
+        } catch (e: Exception) {
+            runCatching { android.provider.DocumentsContract.deleteDocument(resolver, uri) }
             throw e
         }
         return uri

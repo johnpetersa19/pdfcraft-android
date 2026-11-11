@@ -3,6 +3,7 @@ package io.github.artcraftandroid.pdfcraft.ui
 import android.app.ActivityManager
 import io.github.artcraftandroid.pdfcraft.ui.home.FileTool
 import io.github.artcraftandroid.pdfcraft.ui.viewer.FillElement
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import io.github.artcraftandroid.pdfcraft.engine.toBitmap
 import io.github.artcraftandroid.pdfcraft.engine.UserBookmark
@@ -101,7 +102,12 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     }
 
     init {
-        viewModelScope.launch {
+        // Dispatched, not immediate: this starts once the constructor has finished. When the
+        // process is still alive (a file opened from another app after Back closed the last one),
+        // the engine is already loaded, so an immediate start ran on into fields declared further
+        // down (trustedCerts) before they existed, and the app crashed on that first open (#58,
+        // #34, #41).
+        viewModelScope.launch(Dispatchers.Main) {
             application.engine.await().onSuccess { engine = it }.onFailure { engineProblem = it.userMessage }
             refreshRecents()
             // the signers the reader trusts, before any signature is checked
@@ -224,7 +230,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             doc.writable = writable
             loadLinks(eng, doc)
             doc.controller.nightMode = savedNightMode
-            if (savedPageMode != doc.viewer.mode) doc.viewer.switchMode(savedPageMode)
+            doc.viewer.switchMode(savedPageMode, savedSpread)
             // a file left in Reading Mode reopens in it, unless it was opened for a tool
             readingMode = recent?.reading == true && pendingTool == null
             document = doc
@@ -412,6 +418,15 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         }
     }
 
+    /**
+     * The Eraser (#57): rub [path] (points on page [page]) out of the drawings it crosses, within
+     * [radius] points: one step of the document's history, as the desktop's Eraser.
+     */
+    fun eraseInk(doc: OpenDocument, page: Int, path: List<androidx.compose.ui.geometry.Offset>, radius: Float) {
+        if (path.isEmpty()) return
+        runTool(doc, "comment_erase", mapOf("page" to page + 1, "path" to path.map { listOf(it.x.toDouble(), it.y.toDouble()) }, "radius" to radius.toDouble()))
+    }
+
     /** Undo: inside a tool that keeps its own history (Draw) only that; else the document's last edit, named in a message. */
     fun undo(doc: OpenDocument) {
         doc.localUndo?.let { it.undo(); return }
@@ -588,8 +603,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             ctrl && (keyCode == android.view.KeyEvent.KEYCODE_EQUALS || keyCode == android.view.KeyEvent.KEYCODE_PLUS || keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ADD) -> v.zoomStep(1, center)
             ctrl && (keyCode == android.view.KeyEvent.KEYCODE_MINUS || keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_SUBTRACT) -> v.zoomStep(-1, center)
             ctrl -> return false
-            keyCode == android.view.KeyEvent.KEYCODE_N || keyCode == android.view.KeyEvent.KEYCODE_PAGE_DOWN -> v.goToPage(v.currentPage + 1)
-            keyCode == android.view.KeyEvent.KEYCODE_P || keyCode == android.view.KeyEvent.KEYCODE_PAGE_UP -> v.goToPage(v.currentPage - 1)
+            // a row at a time, so Two pages moves a whole spread
+            keyCode == android.view.KeyEvent.KEYCODE_N || keyCode == android.view.KeyEvent.KEYCODE_PAGE_DOWN -> v.goToPage(v.layout.stepRow(v.currentPage, 1))
+            keyCode == android.view.KeyEvent.KEYCODE_P || keyCode == android.view.KeyEvent.KEYCODE_PAGE_UP -> v.goToPage(v.layout.stepRow(v.currentPage, -1))
             keyCode == android.view.KeyEvent.KEYCODE_DPAD_DOWN -> v.setScroll(v.scrollX, v.scrollY + v.viewH * 0.1f)
             keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP -> v.setScroll(v.scrollX, v.scrollY - v.viewH * 0.1f)
             keyCode == android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> v.setScroll(v.scrollX + v.viewW * 0.1f, v.scrollY)
@@ -824,14 +840,67 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         get() = if (appPrefs.getString("pageMode", "continuous") == "single") io.github.artcraftandroid.pdfcraft.ui.viewer.PageMode.SinglePage
         else io.github.artcraftandroid.pdfcraft.ui.viewer.PageMode.Continuous
 
+    /** Whether Continuous pages open in pairs (Two pages), when the two-page views are offered. */
+    val savedSpread: io.github.artcraftandroid.pdfcraft.ui.viewer.Spread
+        get() = when (appPrefs.getString("pageMode", "continuous")) {
+            "two" -> io.github.artcraftandroid.pdfcraft.ui.viewer.Spread.TwoPages
+            "twocover" -> io.github.artcraftandroid.pdfcraft.ui.viewer.Spread.TwoPagesCover
+            else -> null
+        }?.takeIf { twoPagesOffered } ?: io.github.artcraftandroid.pdfcraft.ui.viewer.Spread.None
+
+    /**
+     * Two pages and Two pages with cover page are in View settings: on a tablet, as in the
+     * reference, and on a phone when Extra Features asks for them (#59).
+     */
+    val twoPagesOffered: Boolean
+        get() = twoPagesOnPhones || getApplication<Application>().resources.configuration.smallestScreenWidthDp >= 600
+
+    /** Document properties is in the viewer's menu (Extra Features, #55). */
+    var propertiesInMenu by mutableStateOf(appPrefs.getBoolean("propertiesInMenu", false))
+        private set
+
+    fun updatePropertiesInMenu(on: Boolean) {
+        propertiesInMenu = on
+        appPrefs.edit().putBoolean("propertiesInMenu", on).apply()
+    }
+
+    /** What Document properties shows beyond the document's own info: where the file is, when it changed, custom properties. */
+    class FileFacts(val location: String?, val modified: Long?, val custom: List<Pair<String, String>>)
+
+    suspend fun fileFacts(doc: OpenDocument): FileFacts {
+        val src = doc.source
+        val (location, modified) = withContext(Dispatchers.IO) {
+            (src?.let { runCatching { files.displayLocation(it) }.getOrNull() }) to (src?.let { files.lastModified(it) } ?: doc.file.lastModified().takeIf { it > 0 })
+        }
+        val custom = runCatching {
+            val arr = engine?.tool("doc_info", mapOf("doc" to doc.id))?.optJSONArray("custom")
+            (0 until (arr?.length() ?: 0)).mapNotNull { i -> arr?.optJSONObject(i)?.let { it.optString("name") to it.optString("value") } }.filter { it.first.isNotBlank() }
+        }.getOrDefault(emptyList())
+        return FileFacts(location, modified, custom)
+    }
+
+    var twoPagesOnPhones by mutableStateOf(appPrefs.getBoolean("twoPagesOnPhones", false))
+        private set
+
+    fun updateTwoPagesOnPhones(on: Boolean) {
+        twoPagesOnPhones = on
+        appPrefs.edit().putBoolean("twoPagesOnPhones", on).apply()
+    }
+
     val savedNightMode: Boolean get() = appPrefs.getBoolean("nightMode", false)
 
-    fun setPageMode(doc: OpenDocument, mode: io.github.artcraftandroid.pdfcraft.ui.viewer.PageMode) {
+    fun setPageMode(doc: OpenDocument, mode: io.github.artcraftandroid.pdfcraft.ui.viewer.PageMode, spread: io.github.artcraftandroid.pdfcraft.ui.viewer.Spread = io.github.artcraftandroid.pdfcraft.ui.viewer.Spread.None) {
         // leaving Reading Mode: a canvas laid out already followed the page read; else it shows it on layout
         if (readingMode && doc.viewer.viewW > 0f) pendingPage = null
         readingMode = false
-        doc.viewer.switchMode(mode)
-        appPrefs.edit().putString("pageMode", if (mode == io.github.artcraftandroid.pdfcraft.ui.viewer.PageMode.SinglePage) "single" else "continuous").apply()
+        doc.viewer.switchMode(mode, spread)
+        val saved = when {
+            mode == io.github.artcraftandroid.pdfcraft.ui.viewer.PageMode.SinglePage -> "single"
+            spread == io.github.artcraftandroid.pdfcraft.ui.viewer.Spread.TwoPages -> "two"
+            spread == io.github.artcraftandroid.pdfcraft.ui.viewer.Spread.TwoPagesCover -> "twocover"
+            else -> "continuous"
+        }
+        appPrefs.edit().putString("pageMode", saved).apply()
     }
 
     fun setNightMode(doc: OpenDocument, on: Boolean) {
@@ -854,6 +923,16 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     fun updateKeepScreenOn(on: Boolean) {
         keepScreenOn = on
         appPrefs.edit().putBoolean("keepScreenOn", on).apply()
+    }
+
+    /** E-ink mode (Preferences, Screen setting; #13): black and white, no animations, no fling. */
+    var eInkMode by mutableStateOf(appPrefs.getBoolean("eInkMode", false).also { AppMotion.eInk = it })
+        private set
+
+    fun updateEInkMode(on: Boolean) {
+        eInkMode = on
+        AppMotion.eInk = on
+        appPrefs.edit().putBoolean("eInkMode", on).apply()
     }
 
     /** The viewer's keyboard shortcuts (Preferences; off until turned on, as the reference has them). */
@@ -1914,7 +1993,10 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     private fun scriptOutput(doc: OpenDocument, r: JSONObject) {
         // a script that failed: kept out of sight, as the reference keeps it, but in the log
         r.optString("error").takeIf { it.isNotEmpty() && it != "null" }?.let { android.util.Log.w("PdfCraft", "form script: $it") }
-        r.optJSONArray("alerts")?.let { a -> for (i in 0 until a.length()) showScriptAlert(a.optString(i)) }
+        // js_run gives each alert as an object (message, title, icon, buttons); edits give the text
+        r.optJSONArray("alerts")?.let { a ->
+            for (i in 0 until a.length()) showScriptAlert(a.optJSONObject(i)?.optString("message") ?: a.optString(i))
+        }
         val requests = r.optJSONArray("requests") ?: return
         for (i in 0 until requests.length()) {
             val q = requests.optJSONObject(i) ?: continue
@@ -2322,6 +2404,46 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         toolScreen = null
     }
 
+    /** Scan previews made lately, by photo, corners and look: switching back and forth is instant. */
+    private val scanPreviews = object : LinkedHashMap<String, androidx.compose.ui.graphics.ImageBitmap>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, androidx.compose.ui.graphics.ImageBitmap>?) = size > 8
+    }
+
+    /**
+     * [page] as Save PDF will make it with [filter]: the part inside its corners, straightened,
+     * with the look (#48). The same engine step as saving, run on the smaller photo the screen
+     * already shows, so the preview is the result. Null when it can't be made.
+     */
+    suspend fun scanPreview(page: ScanPage, filter: ScanFilter): androidx.compose.ui.graphics.ImageBitmap? {
+        if (filter == ScanFilter.Original && page.corners.contentEquals(ScanPage.WHOLE)) return page.thumb
+        val key = "${page.file.path}|${page.corners.contentToString()}|$filter"
+        scanPreviews[key]?.let { return it }
+        val eng = engine ?: return null
+        val src = tempFile("jpg")
+        return try {
+            withContext(Dispatchers.IO) {
+                src.outputStream().use { page.thumb.asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, it) }
+            }
+            val id = eng.tool("doc_create", mapOf("from" to "images", "paths" to listOf(src.absolutePath), "name" to "Preview")).optLong("doc")
+            try {
+                val size = eng.tool("doc_info", mapOf("doc" to id)).optJSONArray("pages")?.optJSONObject(0) ?: return null
+                val (w, h) = size.optDouble("width") to size.optDouble("height")
+                val corners = page.corners.mapIndexed { k, v -> v * if (k % 2 == 0) w else h }
+                eng.tool("page_enhance_camera", mapOf("doc" to id, "page" to 1, "corners" to corners, "mode" to filter.mode, "level" to filter.level))
+                val out = eng.tool("doc_info", mapOf("doc" to id)).optJSONArray("pages")?.optJSONObject(0)
+                val longest = maxOf(out?.optDouble("width") ?: w, out?.optDouble("height") ?: h).coerceAtLeast(1.0)
+                val img = withContext(eng.commands) { eng.session.renderPage(id.toULong(), 0u, (1400.0 / longest).toFloat(), null) }
+                img.toBitmap().asImageBitmap().also { scanPreviews[key] = it }
+            } finally {
+                runCatching { eng.tool("doc_close", mapOf("doc" to id, "discard_changes" to true)) }
+            }
+        } catch (e: Exception) {
+            null
+        } finally {
+            withContext(Dispatchers.IO) { src.delete() }
+        }
+    }
+
     /** Save the scanned pages as a PDF with [filter]'s look (or insert them where Organize asked). */
     fun saveScan(filter: ScanFilter) = job(text(R.string.msg_busy_saving_scan)) { eng ->
         val pages = scanPages.toList()
@@ -2360,8 +2482,19 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             } else {
                 val stamp = java.text.SimpleDateFormat("yyyy-MM-dd HH.mm.ss", java.util.Locale.US).format(java.util.Date())
                 val name = DocumentFiles.safeName(chosen.ifEmpty { "Scan $stamp" })
-                val uri = withContext(Dispatchers.IO) { files.saveToDownloads(out, name).also { out.delete() } }
-                tell(text(R.string.msg_saved_downloads, name))
+                // the folder chosen for scans (#60), or Downloads; Downloads too if that folder is gone
+                val folder = scanFolder
+                val folderName = scanFolderName
+                val inFolder = folder?.let { tree -> withContext(Dispatchers.IO) { runCatching { files.saveToFolder(tree, out, name) }.getOrNull() } }
+                val uri = inFolder ?: withContext(Dispatchers.IO) { files.saveToDownloads(out, name) }
+                withContext(Dispatchers.IO) { out.delete() }
+                tell(
+                    when {
+                        inFolder != null -> text(R.string.msg_saved_in_folder, name, folderName ?: "")
+                        folder != null -> text(R.string.msg_scan_folder_lost, name)
+                        else -> text(R.string.msg_saved_downloads, name)
+                    },
+                )
                 open(uri)
             }
         } finally {
@@ -2440,6 +2573,43 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     }
 
     /** A folder chosen in the picker: list its PDFs from now on. */
+    /** The folder new scans are saved in (Extra Features, #60); null: Downloads. */
+    var scanFolder by mutableStateOf(appPrefs.getString("scanFolder", null)?.let(Uri::parse))
+        private set
+
+    /** [scanFolder]'s name, as its provider gave it when it was chosen. */
+    var scanFolderName by mutableStateOf(appPrefs.getString("scanFolderName", null))
+        private set
+
+    /** Asks the activity for the folder picker, for [scanFolder]. */
+    val scanFolderRequests = Channel<Unit>(Channel.CONFLATED)
+
+    fun chooseScanFolder() {
+        scanFolderRequests.trySend(Unit)
+    }
+
+    /**
+     * The folder picked for scans. PdfCraft keeps lasting access to it, so it's also listed under
+     * On device, where the scans then show.
+     */
+    fun onScanFolderPicked(tree: Uri?) {
+        tree ?: return
+        io.github.artcraftandroid.pdfcraft.engine.LocalFiles.addFolder(getApplication(), tree)
+        val name = io.github.artcraftandroid.pdfcraft.engine.LocalFiles.folderName(getApplication(), tree)
+        scanFolder = tree
+        scanFolderName = name
+        appPrefs.edit().putString("scanFolder", tree.toString()).putString("scanFolderName", name).apply()
+        hasFileAccess = io.github.artcraftandroid.pdfcraft.engine.LocalFiles.hasAccess(getApplication())
+        scanLocal(force = true)
+    }
+
+    /** Scans go to Downloads again (the folder stays under On device). */
+    fun resetScanFolder() {
+        scanFolder = null
+        scanFolderName = null
+        appPrefs.edit().remove("scanFolder").remove("scanFolderName").apply()
+    }
+
     fun addLocalFolder(tree: Uri) {
         io.github.artcraftandroid.pdfcraft.engine.LocalFiles.addFolder(getApplication(), tree)
         hasFileAccess = io.github.artcraftandroid.pdfcraft.engine.LocalFiles.hasAccess(getApplication())
@@ -2683,20 +2853,44 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
             val u = Uri.parse(row.key)
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    when {
-                        u.scheme == "file" -> require(File(requireNotNull(u.path)).delete()) { text(R.string.msg_delete_failed) }
-                        u.authority == android.provider.MediaStore.AUTHORITY ->
-                            require(getApplication<Application>().contentResolver.delete(u, null, null) > 0) { text(R.string.msg_delete_failed) }
-                        else -> require(android.provider.DocumentsContract.deleteDocument(getApplication<Application>().contentResolver, u)) { text(R.string.msg_delete_failed) }
+                    val app = getApplication<Application>()
+                    val deleted = try {
+                        when {
+                            u.scheme == "file" -> File(requireNotNull(u.path)).delete()
+                            u.authority == android.provider.MediaStore.AUTHORITY -> app.contentResolver.delete(u, null, null) > 0
+                            android.provider.DocumentsContract.isDocumentUri(app, u) -> android.provider.DocumentsContract.deleteDocument(app.contentResolver, u)
+                            // another app's own file link (a file manager's Open with): only that app can say
+                            else -> app.contentResolver.delete(u, null, null) > 0
+                        }
+                    } catch (e: SecurityException) {
+                        false
+                    } catch (e: IllegalArgumentException) {
+                        false
+                    } catch (e: UnsupportedOperationException) {
+                        false
+                    } catch (e: java.io.FileNotFoundException) {
+                        false
                     }
+                    if (!deleted) throw CannotDelete()
                     recents.remove(setOf(row.key))
                 }
             }
-            ok.onFailure { tell(it.userMessage) }.onSuccess { tell(text(R.string.msg_file_deleted, row.name)) }
+            // A file another app lent (#53): Android's own error named the app's file provider. Say
+            // it in words, and offer what PdfCraft can do: take it off Recent.
+            ok.onFailure { e ->
+                if (e is CannotDelete && u.scheme == "content" && u.authority != android.provider.MediaStore.AUTHORITY && recentList.any { it.uri == row.key }) {
+                    tell(text(R.string.msg_delete_not_allowed, row.name), text(R.string.home_remove_from_recent)) { removeRecent(row.key) }
+                } else {
+                    tell(if (e is CannotDelete) text(R.string.msg_delete_failed) else e.userMessage)
+                }
+            }.onSuccess { tell(text(R.string.msg_file_deleted, row.name)) }
             refreshRecents()
             scanLocal(force = true)
         }
     }
+
+    /** A file the place it's kept wouldn't delete. */
+    private class CannotDelete : Exception()
 
     /** Photos: pick pictures and make them into a PDF (Create PDF from the photo picker). */
     val photoPicks = Channel<Unit>(Channel.CONFLATED)

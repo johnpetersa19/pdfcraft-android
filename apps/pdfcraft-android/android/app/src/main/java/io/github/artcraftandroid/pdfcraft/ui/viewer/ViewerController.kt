@@ -36,7 +36,7 @@ enum class TextMarkup { Highlight, Underline, Strikethrough }
 enum class CommentMode { Text, Voice }
 
 /** What the bottom sheet over the viewer shows. */
-enum class ViewerSheet { None, More, ViewSettings, Attachments, Bookmarks, Comments, MoreTools, Signatures }
+enum class ViewerSheet { None, More, ViewSettings, Attachments, Bookmarks, Comments, MoreTools, Signatures, Properties }
 
 /**
  * The viewer's own state for one document, beside the page view ([ViewerState]): whether the
@@ -53,6 +53,9 @@ class ViewerController {
     var commentMode by mutableStateOf(CommentMode.Text)
 
     var sheet by mutableStateOf(ViewerSheet.None)
+
+    /** Draw's Eraser is chosen instead of the pen (#57). */
+    var drawEraser by mutableStateOf(false)
 
     /** The active tool's open picker (colour, thickness, text size), and Fill & Sign's Sign panel. */
     var picker by mutableStateOf(Picker.None)

@@ -214,6 +214,8 @@
     <string name="home_section_screen">Bildschirmeinstellung</string>
     <string name="home_keep_screen_on">Bildschirm eingeschaltet lassen</string>
     <string name="home_keep_screen_on_body">Der Bildschirm bleibt beim Lesen bis zu 30 Minuten ohne Berührung eingeschaltet.</string>
+    <string name="home_eink_mode">E-Ink-Modus</string>
+    <string name="home_eink_mode_body">Für E-Paper-Bildschirme: Schwarz-Weiß ohne graue Hintergründe, ohne Animationen, und Seiten halten an, wo du den Finger hebst. Die Android-Einstellung „Animationen entfernen“ schaltet die Animationen ebenfalls aus.</string>
     <string name="home_section_keyboard">Tastatur</string>
     <string name="home_keyboard_shortcuts">Tastenkombinationen</string>
     <!-- N, P, Page Down, Page Up, Ctrl+P, Ctrl, + and − are keys on the keyboard -->
@@ -224,6 +226,14 @@
     <string name="home_status_bar_in_documents_body">Die Statusleiste wird zusammen mit den Symbolleisten angezeigt. Wenn du sie durch Tippen ausblendest, nutzt die Seite den gesamten Bildschirm, auch den Bereich um die Kamera.</string>
     <string name="home_search_count">Anzahl der Suchergebnisse anzeigen</string>
     <string name="home_search_count_body">Bei der Dokumentsuche wird angezeigt, welches Ergebnis du gerade ansiehst und wie viele es insgesamt gibt, z. B. 3 von 12.</string>
+    <string name="home_two_pages_on_phones">Zweiseitenansichten auf Smartphones</string>
+    <string name="home_two_pages_on_phones_body">Die Anzeigeeinstellungen bieten auch auf dem Smartphone „Zwei Seiten“ und „Zwei Seiten mit Deckblatt“, praktisch im Querformat. Tablets haben sie immer.</string>
+    <string name="home_properties_in_menu">Dokumenteigenschaften im Menü</string>
+    <string name="home_properties_in_menu_body">Das ⋮-Menü eines Dokuments erhält „Dokumenteigenschaften“: Name, Größe und Speicherort der Datei, Titel, Autor und weitere Angaben, PDF-Version, Seitengröße und Sicherheit.</string>
+    <string name="home_scan_folder">Ordner für Scans</string>
+    <string name="home_scan_folder_body">Neue Scans werden in „%1$s“ gespeichert.</string>
+    <string name="home_scan_folder_downloads">Downloads</string>
+    <string name="home_scan_folder_reset">Scans in „Downloads“ speichern</string>
 
     <!-- Settings: About PdfCraft -->
     <string name="home_section_about">Über</string>
@@ -429,6 +439,7 @@
     <!-- Viewer: the scrubber and Go to page -->
     <!-- Translator note: %1$d is the current page number, %2$d the number of pages. -->
     <string name="viewer_page_of">Seite %1$d von %2$d</string>
+    <string name="viewer_scrub_of">von %1$d</string>
     <string name="viewer_go_to_page">Zu Seite gehen</string>
     <!-- Translator note: the range of page numbers that can be entered; %1$d is the last page. -->
     <string name="viewer_go_to_page_range">1–%1$d</string>
@@ -661,6 +672,41 @@
     <!-- Viewer sheets: View settings -->
     <string name="sheet_continuous">Fortlaufend</string>
     <string name="sheet_single_page">Einzelseite</string>
+    <string name="sheet_two_pages">Zwei Seiten</string>
+    <string name="sheet_two_pages_cover">Zwei Seiten mit Deckblatt</string>
+    <string name="sheet_properties">Dokumenteigenschaften</string>
+    <string name="props_section_file">Datei</string>
+    <string name="props_section_description">Beschreibung</string>
+    <string name="props_section_advanced">Erweitert</string>
+    <string name="props_section_security">Sicherheit</string>
+    <string name="props_section_custom">Benutzerdefiniert</string>
+    <string name="props_name">Name</string>
+    <string name="props_size">Größe</string>
+    <string name="props_location">Speicherort</string>
+    <string name="props_modified">Geändert</string>
+    <string name="props_title">Titel</string>
+    <string name="props_author">Autor</string>
+    <string name="props_subject">Thema</string>
+    <string name="props_keywords">Stichwörter</string>
+    <string name="props_creator">Anwendung</string>
+    <string name="props_producer">PDF-Erzeuger</string>
+    <string name="props_pdf_created">PDF erstellt</string>
+    <string name="props_pdf_modified">PDF geändert</string>
+    <string name="props_version">PDF-Version</string>
+    <string name="props_pages">Seiten</string>
+    <string name="props_page_size">Seitengröße</string>
+    <string name="props_page_size_mixed">%1$s (Seiten unterschiedlich groß)</string>
+    <string name="props_tagged">Getaggtes PDF</string>
+    <string name="props_password">Kennwortgeschützt</string>
+    <string name="props_printing">Drucken</string>
+    <string name="props_copying">Kopieren von Text und Bildern</string>
+    <string name="props_commenting">Kommentieren</string>
+    <string name="props_form_filling">Ausfüllen von Formularen</string>
+    <string name="props_assembly">Seiten organisieren</string>
+    <string name="props_yes">Ja</string>
+    <string name="props_no">Nein</string>
+    <string name="props_allowed">Erlaubt</string>
+    <string name="props_not_allowed">Nicht erlaubt</string>
     <string name="sheet_reading_mode">Lesemodus</string>
     <string name="sheet_night_mode">Nachtmodus</string>
 
@@ -802,6 +848,7 @@
 
     <!-- Draw tool -->
     <string name="toolbar_draw_freeform">Freihand zeichnen</string>
+    <string name="toolbar_eraser">Radierer</string>
     <string name="toolbar_line_thickness">Linienstärke</string>
     <!-- Note: a setting that turns hand-drawn strokes into clean lines, boxes, ovals and polygons -->
     <string name="toolbar_snap_to_shape">An Form ausrichten</string>
@@ -993,6 +1040,8 @@
     <!-- Messages: saving. %1$s is a file name; %2$s is its size (for example "1.2 MB"). -->
     <string name="msg_saved_copy">Kopie gespeichert</string>
     <string name="msg_saved_downloads">Als %1$s in „Downloads“ gespeichert</string>
+    <string name="msg_saved_in_folder">Als %1$s in „%2$s“ gespeichert</string>
+    <string name="msg_scan_folder_lost">Der Ordner für Scans ist nicht mehr erreichbar, daher wurde %1$s in „Downloads“ gespeichert.</string>
     <string name="msg_saved_downloads_size">Als %1$s in „Downloads“ gespeichert (%2$s)</string>
 
     <!-- Messages: Read aloud -->
@@ -1113,6 +1162,7 @@
     <string name="msg_rename_not_here">Diese Datei kann hier nicht umbenannt werden.</string>
     <string name="msg_duplicated">Als %1$s in „Downloads“ dupliziert</string>
     <string name="msg_delete_failed">Die Datei konnte nicht gelöscht werden.</string>
+    <string name="msg_delete_not_allowed">%1$s kann nicht in PdfCraft gelöscht werden: Die App, aus der du die Datei geöffnet hast, erlaubt es nicht. Lösche sie dort oder entferne sie aus „Zuletzt verwendet“.</string>
     <string name="msg_file_deleted">%1$s gelöscht</string>
 
     <!-- ================================================================== -->

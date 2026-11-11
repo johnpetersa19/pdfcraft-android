@@ -374,6 +374,11 @@ private fun Preferences(vm: AppViewModel) {
         PdfSwitch(vm.keepScreenOn, { vm.updateKeepScreenOn(it) })
     }
     Text(stringResource(R.string.home_keep_screen_on_body), color = c.textSecondary, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp))
+    Spacer(Modifier.height(8.dp))
+    SheetRow(null, stringResource(R.string.home_eink_mode), { vm.updateEInkMode(!vm.eInkMode) }) {
+        PdfSwitch(vm.eInkMode, { vm.updateEInkMode(it) })
+    }
+    Text(stringResource(R.string.home_eink_mode_body), color = c.textSecondary, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp))
     SheetDivider()
     Section(stringResource(R.string.home_section_keyboard))
     SheetRow(null, stringResource(R.string.home_keyboard_shortcuts), { vm.updateKeyboardShortcuts(!vm.keyboardShortcuts) }) {
@@ -396,6 +401,23 @@ private fun Preferences(vm: AppViewModel) {
         PdfSwitch(vm.searchCount, { vm.updateSearchCount(it) })
     }
     Text(stringResource(R.string.home_search_count_body), color = c.textSecondary, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp))
+    Spacer(Modifier.height(8.dp))
+    SheetRow(null, stringResource(R.string.home_two_pages_on_phones), { vm.updateTwoPagesOnPhones(!vm.twoPagesOnPhones) }) {
+        PdfSwitch(vm.twoPagesOnPhones, { vm.updateTwoPagesOnPhones(it) })
+    }
+    Text(stringResource(R.string.home_two_pages_on_phones_body), color = c.textSecondary, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp))
+    Spacer(Modifier.height(8.dp))
+    SheetRow(null, stringResource(R.string.home_properties_in_menu), { vm.updatePropertiesInMenu(!vm.propertiesInMenu) }) {
+        PdfSwitch(vm.propertiesInMenu, { vm.updatePropertiesInMenu(it) })
+    }
+    Text(stringResource(R.string.home_properties_in_menu_body), color = c.textSecondary, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp))
+    Spacer(Modifier.height(8.dp))
+    SheetRow(null, stringResource(R.string.home_scan_folder), { vm.chooseScanFolder() }, chevron = true)
+    Text(
+        stringResource(R.string.home_scan_folder_body, vm.scanFolderName ?: stringResource(R.string.home_scan_folder_downloads)),
+        color = c.textSecondary, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 20.dp),
+    )
+    if (vm.scanFolder != null) SheetRow(null, stringResource(R.string.home_scan_folder_reset), { vm.resetScanFolder() }, tint = c.accent)
     Spacer(Modifier.height(24.dp))
     if (authorDialog) {
         var name by remember { mutableStateOf(vm.toolPrefs.author) }

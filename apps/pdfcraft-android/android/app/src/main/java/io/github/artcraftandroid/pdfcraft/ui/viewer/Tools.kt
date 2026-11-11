@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.LocalContext
@@ -83,6 +84,9 @@ class InkStroke(val page: Int) {
     var preview by mutableStateOf<List<Offset>?>(null)
 }
 
+/** How far from the finger the Eraser rubs, on screen. */
+private val ERASER_RADIUS = 10.dp
+
 /** How long the finger stays still to snap a stroke to a shape, and how far it may wander. */
 private const val SNAP_HOLD_MS = 500L
 private val SNAP_SLOP = 8.dp
@@ -112,7 +116,9 @@ fun ToolLayer(vm: AppViewModel, doc: OpenDocument) {
 
 /**
  * The gesture split every tool layer shares: [onOne] gets a one-finger gesture (down, moves, up,
- * or cancelled when a second finger joins), two fingers pan and zoom the view.
+ * or cancelled when a second finger joins), two fingers pan and zoom the view. With [penDraws]
+ * (Draw, #35), once a stylus has touched the page a finger only scrolls, so a resting hand
+ * doesn't draw; a stylus, or its eraser end, always acts.
  */
 fun Modifier.toolGestures(
     doc: OpenDocument,
@@ -120,9 +126,28 @@ fun Modifier.toolGestures(
     onMove: (Offset) -> Unit,
     onUp: (Offset, moved: Boolean) -> Unit,
     onCancel: () -> Unit,
-): Modifier = pointerInput(doc) {
+    penDraws: Boolean = false,
+    onPointer: (PointerType) -> Unit = {},
+): Modifier = pointerInput(doc, penDraws) {
+    var penSeen = false
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
+        val pen = down.type == PointerType.Stylus || down.type == PointerType.Eraser
+        if (pen) penSeen = true
+        onPointer(down.type)
+        if (penDraws && penSeen && !pen) {
+            // a finger after the pen: scroll and zoom only
+            while (true) {
+                val event = awaitPointerEvent()
+                if (event.changes.none { it.pressed }) break
+                val zoom = event.calculateZoom()
+                if (zoom != 1f) doc.viewer.zoomBy(zoom, event.calculateCentroid())
+                val pan = event.calculatePan()
+                if (pan != Offset.Zero) doc.viewer.scrollBy(pan.x, pan.y)
+                event.changes.forEach { if (it.positionChanged()) it.consume() }
+            }
+            return@awaitEachGesture
+        }
         var one = true
         var moved = false
         var last = down.position
@@ -202,16 +227,21 @@ private fun DrawLayer(vm: AppViewModel, doc: OpenDocument) {
             strokes.clear()
             undone.clear()
         }
+        // the strokes not yet added first; then the document's own history, where erasing is
         doc.localUndo = LocalUndo(
-            canUndo = { strokes.isNotEmpty() },
-            canRedo = { undone.isNotEmpty() },
-            undo = { if (strokes.isNotEmpty()) undone.add(strokes.removeAt(strokes.lastIndex)) },
-            redo = { if (undone.isNotEmpty()) strokes.add(undone.removeAt(undone.lastIndex)) },
+            canUndo = { strokes.isNotEmpty() || doc.info.undo != null },
+            canRedo = { undone.isNotEmpty() || doc.info.redo != null },
+            undo = { if (strokes.isNotEmpty()) undone.add(strokes.removeAt(strokes.lastIndex)) else vm.runTool(doc, "edit_undo") },
+            redo = { if (undone.isNotEmpty()) strokes.add(undone.removeAt(undone.lastIndex)) else vm.runTool(doc, "edit_redo") },
         )
         onDispose {
             doc.localUndo = null
         }
     }
+    // the Eraser (#57), or a pen's eraser end: the path rubbed, shown as it goes and applied on lifting
+    var eraserTip by remember { mutableStateOf(false) }
+    var rubbing by remember { mutableStateOf<InkStroke?>(null) }
+    val eraserRadius = with(LocalDensity.current) { ERASER_RADIUS.toPx() }
     // press and hold: where the finger has been still since, and when it last moved further
     var stillAt by remember { mutableStateOf(Offset.Zero) }
     var movedAt by remember { mutableStateOf(0L) }
@@ -230,12 +260,22 @@ private fun DrawLayer(vm: AppViewModel, doc: OpenDocument) {
             doc,
             onDown = { p ->
                 val at = doc.viewer.screenToPage(p) ?: return@toolGestures
+                if (doc.controller.drawEraser || eraserTip) {
+                    // what was drawn here and not added yet is added first, so it can be erased too
+                    if (strokes.any { it.points.size >= 2 }) doc.commitTool?.invoke()
+                    rubbing = InkStroke(at.page).also { it.points.add(Offset(at.x, at.y)) }
+                    return@toolGestures
+                }
                 stillAt = p
                 movedAt = System.currentTimeMillis()
                 current = InkStroke(at.page).also { it.points.add(Offset(at.x, at.y)); strokes.add(it) }
                 undone.clear()
             },
             onMove = { p ->
+                rubbing?.let { r ->
+                    doc.viewer.screenToPage(p, nearest = true)?.takeIf { it.page == r.page }?.let { r.points.add(Offset(it.x, it.y)) }
+                    return@toolGestures
+                }
                 val s = current ?: return@toolGestures
                 if ((p - stillAt).getDistance() > slop) {
                     stillAt = p
@@ -246,6 +286,11 @@ private fun DrawLayer(vm: AppViewModel, doc: OpenDocument) {
                 if (at.page == s.page) s.points.add(Offset(at.x, at.y))
             },
             onUp = { _, _ ->
+                rubbing?.let { r ->
+                    rubbing = null
+                    vm.eraseInk(doc, r.page, r.points.toList(), eraserRadius / doc.viewer.pixelsPerPoint(r.page))
+                    return@toolGestures
+                }
                 val s = current
                 current = null
                 if (s != null) {
@@ -261,7 +306,10 @@ private fun DrawLayer(vm: AppViewModel, doc: OpenDocument) {
             onCancel = {
                 current?.let { strokes.remove(it) }
                 current = null
+                rubbing = null
             },
+            penDraws = true,
+            onPointer = { eraserTip = it == androidx.compose.ui.input.pointer.PointerType.Eraser },
         ),
     ) {
         Canvas(Modifier.fillMaxSize()) {
@@ -277,6 +325,15 @@ private fun DrawLayer(vm: AppViewModel, doc: OpenDocument) {
                     path, color.copy(alpha = opacity),
                     style = Stroke(width = width * doc.viewer.pixelsPerPoint(s.page), cap = StrokeCap.Round, join = StrokeJoin.Round),
                 )
+            }
+            // the eraser's path, as wide as it rubs
+            rubbing?.let { r ->
+                val path = Path()
+                r.points.forEachIndexed { i, pt ->
+                    val o = doc.viewer.pageToScreen(r.page, pt.x, pt.y)
+                    if (i == 0) path.moveTo(o.x, o.y) else path.lineTo(o.x, o.y)
+                }
+                drawPath(path, androidx.compose.ui.graphics.Color(0x55808080), style = Stroke(width = eraserRadius * 2, cap = StrokeCap.Round, join = StrokeJoin.Round))
             }
         }
     }
@@ -379,7 +436,8 @@ fun ToolSubToolbar(vm: AppViewModel, doc: OpenDocument) {
         ViewerTool.Draw -> SubToolbar {
             val snapOn = stringResource(R.string.toolbar_snap_on)
             val snapOff = stringResource(R.string.toolbar_snap_off)
-            SubTool(LucideIcons.PenLine, stringResource(R.string.toolbar_draw_freeform), true, {})
+            SubTool(LucideIcons.PenLine, stringResource(R.string.toolbar_draw_freeform), !ctl.drawEraser, { ctl.drawEraser = false })
+            SubTool(LucideIcons.Eraser, stringResource(R.string.toolbar_eraser), ctl.drawEraser, { ctl.drawEraser = true })
             SubDivider()
             SubProperty(LucideIcons.Menu, stringResource(R.string.toolbar_line_thickness), picker == Picker.Width, { toggle(Picker.Width) })
             ColorDot(prefs.color(StyledTool.Ink), picker == Picker.Color) { toggle(Picker.Color) }
